@@ -42,7 +42,7 @@ python3 cliente.py --server 137.131.178.229 --group Grupo06 --file small
 Após a execução bem-sucedida, o programa gerará automaticamente três arquivos no diretório atual:
 
 1. `received_<tamanho_do_arquivo>`: O arquivo binário baixado e validado (ex: `received_small`).
-2. `metricas_saw.csv`: Planilha contendo as colunas de Sequência, RTT, Throughput, Retransmissões e ocorrências de Timeout para análise detalhada.
+2. `metrics_grupo06_saw_YYYYMMDD_HHMMSS.csv`: Planilha contendo as métricas.
 3. `grafico_saw.png`: Imagem contendo o gráfico que relaciona o tempo de ida e volta (RTT) e a taxa de transferência (Throughput) ao longo dos segmentos baixados.
 
 ## 📊 Comportamento de Rede Esperado (Análise de RTT)
