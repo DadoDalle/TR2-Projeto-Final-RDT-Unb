@@ -3,6 +3,7 @@ import time
 import hashlib
 import argparse
 import csv
+from datetime import datetime # Importação nova para formatar a hora atual
 try:
     import matplotlib.pyplot as plt
 except ImportError:
@@ -50,6 +51,7 @@ def baixar_segmento(sock, servidor, seq):
     
     retransmissoes = 0
     timeout_ocorrido = False
+    timeout_ms = sock.gettimeout() * 1000 # Pega o timeout do socket configurado (em ms)
     
     inicio_req = time.time()
     
@@ -58,14 +60,14 @@ def baixar_segmento(sock, servidor, seq):
         
         try:
             dados, _ = sock.recvfrom(65507)
+            # Pega o momento em que o pacote chegou em formato ISO 8601
+            timestamp_chegada = datetime.now().isoformat() 
 
-            # encontra o índice do terceiro '|' separando o cabeçalho do payload
             idx1 = dados.find(b"|")
             idx2 = dados.find(b"|", idx1 + 1)
             idx3 = dados.find(b"|", idx2 + 1)
             
             if idx3 != -1:
-                # decode no cabeçalho
                 cabecalho = dados[:idx3].decode("utf-8", errors="ignore")
                 
                 if cabecalho.startswith("DATA"):
@@ -73,14 +75,18 @@ def baixar_segmento(sock, servidor, seq):
                     
                     if seq_recebida == seq:
                         payload = dados[idx3+1:]
+                        size_bytes = len(payload)
                         
-                        # Envia ACK logo após receber e validar o DATA
                         sock.sendto(pacote_ack, servidor)
-                        rtt = time.time() - inicio_req
-                        throughput = len(payload) / rtt if rtt > 0 else 0
-                        rtt = rtt * 1000  # Convertendo para milissegundos
                         
-                        return payload, rtt, throughput, retransmissoes, timeout_ocorrido
+                        rtt_s = time.time() - inicio_req
+                        rtt_ms = rtt_s * 1000
+                        
+                        # Throughput em kbps (kilobits per second)
+                        # size_bytes * 8 = bits | / rtt_s = bits por seg | / 1000 = kilobits por seg
+                        throughput_kbps = ((size_bytes * 8) / rtt_s) / 1000 if rtt_s > 0 else 0
+                        
+                        return payload, timestamp_chegada, size_bytes, rtt_ms, timeout_ms, throughput_kbps, retransmissoes, timeout_ocorrido
         
         except socket.timeout:
             timeout_ocorrido = True
@@ -91,29 +97,32 @@ def gerar_grafico(metricas):
         return
         
     seqs = [m[0] for m in metricas]
-    rtts = [m[1] for m in metricas]
-    thrs = [m[2] for m in metricas]
+    rtts = [m[3] for m in metricas] # rtt_ms
+    thrs = [m[6] for m in metricas] # throughput_kbps
 
     sumRTT = sum(rtts)
     avgRTT = sumRTT / len(rtts) if len(rtts) > 0 else 0
     print(f"    RTT médio: {avgRTT:.2f} ms")
 
-    fig, ax1 = plt.subplots(figsize=(10, 5))
+    # Cria uma figura com 2 gráficos (2 linhas, 1 coluna)
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
 
-    color = 'tab:red'
-    ax1.set_xlabel('Número do Segmento')
-    ax1.set_ylabel('RTT (ms)', color=color)
-    ax1.plot(seqs, rtts, color=color, marker='o', markersize=3, linewidth=1)
-    ax1.tick_params(axis='y', labelcolor=color)
+    # Gráfico 1: RTT
+    color1 = 'tab:red'
+    ax1.set_ylabel('RTT (ms)', color=color1)
+    ax1.plot(seqs, rtts, color=color1, marker='o', markersize=3, linewidth=1)
+    ax1.tick_params(axis='y', labelcolor=color1)
+    ax1.set_title(f'Métricas Stop-and-Wait\nRTT Médio: {avgRTT:.2f} ms')
+    ax1.grid(True, linestyle='--', alpha=0.6) # Adiciona grade para facilitar a leitura
 
-    ax2 = ax1.twinx()
-    color = 'tab:blue'
-    ax2.set_ylabel('Throughput (B/s)', color=color)
-    ax2.plot(seqs, thrs, color=color, marker='x', markersize=3, linewidth=1, alpha=0.7)
-    ax2.tick_params(axis='y', labelcolor=color)
+    # Gráfico 2: Throughput
+    color2 = 'tab:blue'
+    ax2.set_xlabel('Número do Segmento')
+    ax2.set_ylabel('Throughput (kbps)', color=color2)
+    ax2.plot(seqs, thrs, color=color2, marker='x', markersize=3, linewidth=1, alpha=0.7)
+    ax2.tick_params(axis='y', labelcolor=color2)
+    ax2.grid(True, linestyle='--', alpha=0.6)
 
-    plt.title('Métricas Stop-and-Wait: RTT e Throughput por Segmento')
-    plt.text(0.02, 0.98, f'RTT Médio: {avgRTT:.2f} ms', transform=plt.gca().transAxes, verticalalignment='top', fontsize=10)
     fig.tight_layout()
     plt.savefig('grafico_saw.png')
     print("    Gráfico salvo como 'grafico_saw.png'.")
@@ -141,21 +150,49 @@ def main():
         dados_completos = bytearray()
         metricas = []
         
-        # Loop REQ -> DATA -> ACK
+        # Parâmetros constantes para a Entrega 1 (Stop-and-Wait)
+        window_size = 1
+        protocol = "saw"
+        rtt_estimated_ms = 0.0 # Será implementado apenas na Tarefa 3
+        
         for seq in range(total_seg):
-            payload, rtt_seg, thr, ret, t_out = baixar_segmento(sock, servidor, seq)
+            payload, timestamp_iso, size_bytes, rtt_ms, t_out_ms, thr_kbps, ret, t_out_occ = baixar_segmento(sock, servidor, seq)
             dados_completos.extend(payload)
-            metricas.append([seq, rtt_seg, thr, ret, int(t_out)])
+            
+            # Montando a linha do CSV com todas as colunas obrigatórias
+            linha_metrica = [
+                seq, 
+                timestamp_iso, 
+                size_bytes, 
+                round(rtt_ms, 2), 
+                rtt_estimated_ms, 
+                t_out_ms, 
+                round(thr_kbps, 2), 
+                ret, 
+                int(t_out_occ), 
+                window_size, 
+                protocol
+            ]
+            metricas.append(linha_metrica)
             
             if (seq + 1) % (total_seg // 10 if total_seg >= 10 else 1) == 0:
                 print(f"    Progresso: {seq + 1}/{total_seg} segmentos...")
                 
-        # Gravação do CSV de métricas
-        with open("metricas_saw.csv", "w", newline="") as f:
+        # Gravação do CSV de métricas com nome dinâmico
+        data_hora_atual = datetime.now().strftime("%Y%m%d_%H%M%S")
+        nome_csv = f"metrics_{args.group.lower()}_{protocol}_{data_hora_atual}.csv"
+        
+        with open(nome_csv, "w", newline="") as f:
             writer = csv.writer(f)
-            writer.writerow(["seq", "rtt_s", "throughput_Bps", "retransmissoes", "timeout_ocorrido"])
+            # Cabeçalho exigido pelo documento
+            writer.writerow([
+                "segment", "timestamp", "size_bytes", "rtt_ms", 
+                "rtt_estimated_ms", "timeout_ms", "throughput_kbps", 
+                "retransmissions", "timeout_occurred", "window_size", "protocol"
+            ])
             writer.writerows(metricas)
-        print("    Métricas salvas em 'metricas_saw.csv'.")
+            
+        print(f"    Métricas salvas em '{nome_csv}'.")
         
         # Geração de Gráfico
         gerar_grafico(metricas)
@@ -166,20 +203,12 @@ def main():
         pacote_fin = f"FIN|checksum={md5_calculado}".encode("utf-8")
         
         recebeu_done = False
-        
-        # Tenta enviar o FIN e aguardar o DONE em até 5 tentativas
         for tentativa in range(5):
             sock.sendto(pacote_fin, servidor)
-            
             try:
-                # Laço interno: esvazia o buffer de pacotes DATA atrasados até achar o DONE
                 while True:
-                    # Usa buffer grande pois pacotes DATA residuais podem ter até 65KB
                     dados_done, _ = sock.recvfrom(65507)
-                    
-                    # Checa o cabeçalho com segurança, ignorando bytes binários ilegais
                     cabecalho_done = dados_done[:15].decode("utf-8", errors="ignore")
-                    
                     if cabecalho_done.startswith("DONE"):
                         resposta_done = dados_done.decode("utf-8", errors="ignore")
                         print(f"    Servidor respondeu: {resposta_done}")
@@ -193,14 +222,13 @@ def main():
                             print("    [ERRO] Checksum inválido segundo o servidor (DONE|ok=0).")
                         
                         recebeu_done = True
-                        break # Encerra o laço interno (while)
-                        
+                        break 
             except socket.timeout:
                 print(f"    Timeout aguardando DONE (tentativa {tentativa+1}/5). Reenviando FIN...")
-                continue # Volta para o começo do for, enviando o FIN novamente
+                continue
                 
             if recebeu_done:
-                break # Encerra o laço externo de tentativas (for)
+                break
                 
         if not recebeu_done:
             print("    [ERRO] O servidor não respondeu com DONE após várias tentativas.")
