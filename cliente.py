@@ -193,13 +193,27 @@ def main():
             writer.writerows(metricas)
             
         print(f"    Métricas salvas em '{nome_csv}'.")
-        
+
+        # Throughput teórico máximo = (segment_size * 8) / RTT_médio
+        rtt_medio_s = sum(m[3] for m in metricas) / len(metricas) / 1000
+        throughput_max_kbps = (tam_seg * 8) / rtt_medio_s / 1000
+        throughput_medio_kbps = sum(m[6] for m in metricas) / len(metricas)
+        print(f"    RTT médio: {rtt_medio_s * 1000:.2f} ms")
+        print(f"    Throughput teórico máximo: {throughput_max_kbps:.2f} kbps")
+        print(f"    Throughput médio medido: {throughput_medio_kbps:.2f} kbps")
+
         # Geração de Gráfico
         gerar_grafico(metricas)
 
         # Passo 4 - FIN e DONE
         print("[4] ENCERRAMENTO E VALIDAÇÃO")
         md5_calculado = hashlib.md5(dados_completos).hexdigest()
+        print(f"    MD5 esperado:  {checksum_esperado}")
+        print(f"    MD5 calculado: {md5_calculado}")
+        if md5_calculado == checksum_esperado:
+            print("    [OK] Checksum MD5 confere.")
+        else:
+            print("    [ERRO] Checksum MD5 não confere.")
         pacote_fin = f"FIN|checksum={md5_calculado}".encode("utf-8")
         
         recebeu_done = False
